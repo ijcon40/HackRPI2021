@@ -4,16 +4,18 @@ import shutil
 import os
 import nltk
 # from memory_profiler import profile
-from memory_profiler import profile
-
+# from memory_profiler import profile
+nltk.download('averaged_perceptron_tagger')
 nltk.download('stopwords')
+nltk.download('wordnet')
 from nltk.corpus import stopwords
 import gc
 import random
 
+from string import ascii_letters
 
 
-from pdf2image import convert_from_path
+from pdf2image import convert_from_path, pdfinfo_from_path
 
 import cv2.cv2 as cv2
 
@@ -22,41 +24,24 @@ pytesseract.pytesseract.tesseract_cmd = '/usr/bin/tesseract'
 
 from google.cloud import storage
 
+from nltk.corpus import stopwords
+from nltk.stem import WordNetLemmatizer
+from nltk.tag import pos_tag
+
 # Setting credentials using the downloaded JSON file
 
 
-
-def mark_region(image_path):
-    im = cv2.imread(image_path)
-
-    gray = cv2.cvtColor(im, cv2.COLOR_BGR2GRAY)
-    blur = cv2.GaussianBlur(gray, (9, 9), 0)
-    thresh = cv2.adaptiveThreshold(blur, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, 11, 30)
-
-    # Dilate to combine adjacent text contours
-    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (9, 9))
-    dilate = cv2.dilate(thresh, kernel, iterations=4)
-
-    # Find contours, highlight text areas, and extract ROIs
-    cnts = cv2.findContours(dilate, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    cnts = cnts[0] if len(cnts) == 2 else cnts[1]
-    image=im
-    line_items_coordinates = []
-    for c in cnts:
-        area = cv2.contourArea(c)
-        x, y, w, h = cv2.boundingRect(c)
-
-        if y >= 600 and x <= 1000:
-            if area > 10000:
-                image = cv2.rectangle(im, (x, y), (2200, y + h), color=(255, 0, 255), thickness=3)
-                line_items_coordinates.append([(x, y), (2200, y + h)])
-
-        if y >= 2400 and x <= 2000:
-            image = cv2.rectangle(im, (x, y), (2200, y + h), color=(255, 0, 255), thickness=3)
-            line_items_coordinates.append([(x, y), (2200, y + h)])
-
-    return image, line_items_coordinates
-
+def tag_trans(S):
+    S = S[:2]
+    if S == "NN":
+        return "n"
+    if S == "VB":
+        return "v"
+    if S == "JJ":
+        return "a"
+    if S == "RB":
+        return "r"
+    return "e"
 
 # word_tokenize accepts
 # a string as an input, not a file.
@@ -148,11 +133,15 @@ if __name__ == '__main__':
             i+=1
             print(f'executing identifiers {i}/{len(identifiers)}')
             gc.collect()
-            resp = requests.get(f'https://core.ac.uk/download/{id}.pdf')
-            if(resp.status_code!=200):
+            try:
+                resp = requests.get(link)
+            except:
+                resp = None
+                pass
+            if(resp is None or resp.status_code!=200):
                 print('got bad status code, trying backup')
                 try:
-                    resp = requests.get(link)
+                    resp = requests.get(f'https://core.ac.uk/download/{id}.pdf')
                     if (resp.status_code != 200):
                         print('tried backup, still got bad status')
                         continue
@@ -163,7 +152,17 @@ if __name__ == '__main__':
 
             file = open(save_path + str(id) + '.pdf', 'wb')
             file.write(resp.content)
-            pages = -1
+            print('calculating number of pages')
+            try:
+                info = pdfinfo_from_path(save_path + str(id) + '.pdf', userpw=None, poppler_path=None)
+            except:
+                print('failed in pdf parsing')
+                continue
+            maxPages = info["Pages"]
+            if(maxPages>20):
+                print(f'too many pages ({maxPages}) :/ skipping paper')
+                del resp
+                continue
             try:
                 pages = convert_from_path(save_path + str(id) + '.pdf', dpi=350, fmt='jpeg')
             except:
@@ -176,7 +175,6 @@ if __name__ == '__main__':
                 print(f'running on page {i}/{len(pages)}')
                 image_name = save_path + str(id) + ".jpg"
                 page.save(image_name, "JPEG")
-                # image, line_items_coordinates = mark_region(image_name)
                 # c = line_items_coordinates[1]
 
                 # cropping image img = image[y0:y1, x0:x1]
@@ -187,20 +185,41 @@ if __name__ == '__main__':
 
                 # pytesseract image to string to get results
                 t_text = str(pytesseract.image_to_string(thresh1, config='--psm 3'))
-                text=text+t_text
+                text=text+t_text.replace('.', '').replace(';', '').replace(':', '')
                 os.remove(save_path + str(id) + ".jpg")
                 del img
                 del thresh1
             print('finished OCR')
-            words = text.split()
+            words = []
+            for candidate in text.split():
+                if all(c in ascii_letters+'-\'' for c in candidate):
+                    if len(candidate)==1:
+                        if candidate[0] in ascii_letters:
+                            words.append(candidate)
+                    else:
+                        words.append(candidate)
+            # print(words)
+            words = pos_tag(words)
+            # print(words)
+            failcount = 0
+            wordcount = 0
+            lemmatizer = WordNetLemmatizer()
             try:
                 appendFile = open(save_path + str(id) + '.txt', 'a')
-                for word in words:
-                    try:
-                        float(word)
-                    except:
-                        if not word in stop_words:
-                            appendFile.write(" " + word.lower())
+                for t in words:
+                    word = t[0].lower()
+                    if word not in stop_words:
+                        wordcount+=1
+                        wtag = tag_trans(t[1])
+                        # print(wtag)
+                        if wtag == "e":
+                            failcount+=1
+                            appendFile.write(" " + word)
+                        else:
+                            # print(f'trying to lemmatize {word} got {lemmatizer.lemmatize(word, wtag)}')
+                            appendFile.write(" " + lemmatizer.lemmatize(word, wtag))
+                    else:
+                        pass
                 appendFile.close()
                 print('saved file, trying to upload to gcloud')
                 blob = bucket.blob('data_'+str(id)+'.txt')
@@ -208,7 +227,6 @@ if __name__ == '__main__':
             except:
                 print('errored in append to file')
                 pass
-            del blob
             del pages
             del words
             del text
