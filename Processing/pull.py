@@ -47,6 +47,7 @@ def tag_trans(S):
 # a string as an input, not a file.
 if __name__ == '__main__':
     api_key = 'QJhYeCVqW47z29PEvxrtoN3A0K1sZbLU'
+    uniqueid = random.randint(0, 1000)
 
     client = storage.Client.from_service_account_json(json_credentials_path='/home/ijcon40/hackrpi2021-6276c17facd0.json')
 
@@ -94,15 +95,21 @@ if __name__ == '__main__':
     #for each of the journals disregarding the first one, we get all documents that correspond to their papers
 
     if(os.path.exists('./data')):
-        shutil.rmtree('./data')
+        # shutil.rmtree('./data')
+        pass
+    else:
+        os.mkdir('./data')
     if(os.path.exists('./testing')):
-        shutil.rmtree('./testing')
-    os.mkdir('./data')
-    os.mkdir('./testing')
+        # shutil.rmtree('./testing')
+        pass
+    else:
+        os.mkdir('./testing')
+
 
     stop_words = set(stopwords.words('english'))
     print(stop_words)
     print(f'got {len(journals)} journals')
+
 
     def getJournalDocuments(save_path, journal_obj):
         #get the papers from the journal and save them to an identifier
@@ -150,11 +157,12 @@ if __name__ == '__main__':
                 except:
                     print(f'backup failed with link {link}')
 
-            file = open(save_path + str(id) + '.pdf', 'wb')
+            path = save_path + str(id)+'_'+str(uniqueid)+'_'+ '.pdf'
+            file = open(path, 'wb')
             file.write(resp.content)
             print('calculating number of pages')
             try:
-                info = pdfinfo_from_path(save_path + str(id) + '.pdf', userpw=None, poppler_path=None)
+                info = pdfinfo_from_path(path, userpw=None, poppler_path=None)
             except:
                 print('failed in pdf parsing')
                 continue
@@ -164,16 +172,16 @@ if __name__ == '__main__':
                 del resp
                 continue
             try:
-                pages = convert_from_path(save_path + str(id) + '.pdf', dpi=350, fmt='jpeg')
+                pages = convert_from_path(path, dpi=350, fmt='jpeg')
             except:
                 print('errored in conversion')
-                os.remove(save_path + str(id) + '.pdf')
+                os.remove(path)
                 continue
             text = ''
             print(f'calculated number of pages {len(pages)}, running OCR')
             for i, page in enumerate(pages):
                 print(f'running on page {i}/{len(pages)}')
-                image_name = save_path + str(id) + ".jpg"
+                image_name = save_path + str(id)+'_'+str(uniqueid)+'_'+ ".jpg"
                 page.save(image_name, "JPEG")
                 # c = line_items_coordinates[1]
 
@@ -186,7 +194,7 @@ if __name__ == '__main__':
                 # pytesseract image to string to get results
                 t_text = str(pytesseract.image_to_string(thresh1, config='--psm 3'))
                 text=text+t_text.replace('.', '').replace(';', '').replace(':', '')
-                os.remove(save_path + str(id) + ".jpg")
+                os.remove(image_name)
                 del img
                 del thresh1
             print('finished OCR')
@@ -205,7 +213,7 @@ if __name__ == '__main__':
             wordcount = 0
             lemmatizer = WordNetLemmatizer()
             try:
-                appendFile = open(save_path + str(id) + '.txt', 'a')
+                appendFile = open(save_path + str(id)+'_'+str(uniqueid)+'_'+ '.txt', 'a')
                 for t in words:
                     word = t[0].lower()
                     if word not in stop_words:
@@ -223,7 +231,7 @@ if __name__ == '__main__':
                 appendFile.close()
                 print('saved file, trying to upload to gcloud')
                 blob = bucket.blob('data_'+str(id)+'.txt')
-                blob.upload_from_filename(save_path + str(id) + '.txt')
+                blob.upload_from_filename(save_path + str(id)+'_'+str(uniqueid)+'_'+ '.txt')
             except:
                 print('errored in append to file')
                 pass
